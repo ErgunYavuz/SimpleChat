@@ -13,12 +13,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+//import org.slf4j.Logger;
+//import org.slf4j.LoggerFactory;
 
 @SpringBootTest
 class ChatApplicationTests {
-    private static final Logger logger = LoggerFactory.getLogger(ChatWebSocketHandler.class);
+    //private static final Logger logger = LoggerFactory.getLogger(ChatWebSocketHandler.class);
 
 
 	@Autowired

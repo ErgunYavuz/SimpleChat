@@ -1,62 +1,90 @@
 package com.chat_application;
 
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.lang.NonNull;
-import org.slf4j.LoggerFactory;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.fasterxml.jackson.databind.JsonNode;
 
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
     private static final Logger logger = LoggerFactory.getLogger(ChatWebSocketHandler.class);
-    private final Map<String, WebSocketSession> sessions  = new ConcurrentHashMap<>();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
+    private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
 
-    @Autowired
-    private MessageRepository messageRepository;
+    public ChatWebSocketHandler() {
+    this.objectMapper = new ObjectMapper();
+    this.objectMapper.registerModule(new JavaTimeModule());
+}
 
     @Override
     public void afterConnectionEstablished(@NonNull WebSocketSession session) throws Exception {
-        sessions.put(session.getId(), session);
+        // Connection established, but username not set yet
         logger.info("New WebSocket connection established: {}", session.getId());
-        logger.info(sessions.toString());
+    }
 
+    @Override
+    protected void handleTextMessage(@NonNull WebSocketSession session, @NonNull TextMessage message) throws IOException {
+        try {
+            JsonNode jsonNode = objectMapper.readTree(message.getPayload());
+            
+            if (jsonNode.has("type") && "LOGIN".equals(jsonNode.get("type").asText())) {
+                // Handle login
+                String username = jsonNode.get("sender").asText();
+                sessions.put(username, session);
+                broadcastMessage(new ChatMessage("System", username + " has joined the chat", null));
+            } else {
+                // Handle regular chat message
+                String sender = getSenderForSession(session);
+                if (sender != null) {
+                    ChatMessage chatMessage = objectMapper.treeToValue(jsonNode, ChatMessage.class);
+                    chatMessage.setSender(sender);
+                    broadcastMessage(chatMessage);
+                } else {
+                    session.sendMessage(new TextMessage("Error: Please login first"));
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error processing message: " + e.getMessage());
+            session.sendMessage(new TextMessage("Error processing message"));
+        }
+    }
+
+    private String getSenderForSession(WebSocketSession session) {
+        return sessions.entrySet()
+                       .stream()
+                       .filter(entry -> entry.getValue().equals(session))
+                       .map(Map.Entry::getKey)
+                       .findFirst()
+                       .orElse(null);
+    }
+
+    private void broadcastMessage(ChatMessage message) throws IOException {
+        TextMessage textMessage = new TextMessage(objectMapper.writeValueAsString(message));
+        for (WebSocketSession session : sessions.values()) {
+            session.sendMessage(textMessage);
+        }
     }
 
     @Override
     public void afterConnectionClosed(@NonNull WebSocketSession session, @NonNull CloseStatus status) throws Exception {
-        sessions.values().remove(session);
-        logger.info("WebSocket connection closed: {}", session.getId());
-    }
-
-    @Override
-    public void handleTextMessage(@NonNull WebSocketSession session, @NonNull TextMessage message) throws Exception {
-        try{
-            ChatMessage chatMessage = objectMapper.readValue(message.getPayload(), ChatMessage.class);
-            chatMessage.setTimestamp(System.currentTimeMillis());
-            logger.info("Received message from {}: {}", session.getId(), chatMessage.toString());
-
-            messageRepository.save(chatMessage);
-    
-            //broadcast to all clients
-            TextMessage outMessage = new TextMessage(objectMapper.writeValueAsString(chatMessage));
-            for (WebSocketSession s : sessions.values()) {
-                s.sendMessage(outMessage);
-            }
-            logger.info("Message broadcasted to {} clients", sessions.size());
-    
-        } catch (com.fasterxml.jackson.core.JsonParseException e){
-            String errorMessage = "Error: Invalid JSON format - " + e.getMessage();
-            session.sendMessage(new TextMessage(errorMessage));
+        String username = getSenderForSession(session);
+        if (username != null) {
+            sessions.remove(username);
+            broadcastMessage(new ChatMessage("System", username + " has left the chat", null));
         }
-       
+        logger.info("WebSocket connection closed: " + session.getId());
     }
 
     public Map<String, WebSocketSession> getSessions(){
