@@ -1,4 +1,4 @@
-package com;
+package com.chat_application;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 
