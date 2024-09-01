@@ -16,7 +16,6 @@ public class ChatApplication implements WebSocketConfigurer {
         SpringApplication.run(ChatApplication.class, args);
     }
 
-    @Bean
     public ChatWebSocketHandler chatWebSocketHandler() {
         return new ChatWebSocketHandler();
     }

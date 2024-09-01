@@ -17,17 +17,10 @@ import com.fasterxml.jackson.annotation.JsonFormat;
 @Builder
 public class ChatMessage {
     @Id
+    private String type;
     @GeneratedValue(strategy = GenerationType.AUTO)
-    private Long id;
     private String sender;
     private String content;
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX", timezone = "UTC")
     private Instant timestamp;
-
-
-    public ChatMessage(String sender, String content, Instant timestamp) {
-        this.sender = sender;
-        this.content = content;
-        this.timestamp = timestamp != null ? timestamp : Instant.now();
-    }
 }

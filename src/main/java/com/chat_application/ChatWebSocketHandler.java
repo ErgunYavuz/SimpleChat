@@ -3,95 +3,162 @@ package com.chat_application;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
-import org.springframework.web.socket.CloseStatus;
-import org.springframework.lang.NonNull;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.fasterxml.jackson.databind.JsonNode;
-
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import org.springframework.stereotype.Component;
+import org.springframework.web.socket.CloseStatus;
 
 import java.io.IOException;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
+@Component
 public class ChatWebSocketHandler extends TextWebSocketHandler {
 
-    private static final Logger logger = LoggerFactory.getLogger(ChatWebSocketHandler.class);
-    private final ObjectMapper objectMapper;
+    private final ObjectMapper objectMapper = new ObjectMapper();
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
-
-    public ChatWebSocketHandler() {
-    this.objectMapper = new ObjectMapper();
-    this.objectMapper.registerModule(new JavaTimeModule());
-}
+    private static final Pattern USERNAME_PATTERN = Pattern.compile("^[a-zA-Z0-9_]{3,20}$");
 
     @Override
-    public void afterConnectionEstablished(@NonNull WebSocketSession session) throws Exception {
+    public void afterConnectionEstablished(WebSocketSession session) throws Exception {
         // Connection established, but username not set yet
-        logger.info("New WebSocket connection established: {}", session.getId());
+        System.out.println("New WebSocket connection established: " + session.getId());
     }
 
     @Override
-    protected void handleTextMessage(@NonNull WebSocketSession session, @NonNull TextMessage message) throws IOException {
+    protected void handleTextMessage(WebSocketSession session, TextMessage message) throws Exception {
         try {
             JsonNode jsonNode = objectMapper.readTree(message.getPayload());
             
-            if (jsonNode.has("type") && "LOGIN".equals(jsonNode.get("type").asText())) {
-                // Handle login
-                String username = jsonNode.get("sender").asText();
-                sessions.put(username, session);
-                broadcastMessage(new ChatMessage("System", username + " has joined the chat", null));
-            } else {
-                // Handle regular chat message
-                String sender = getSenderForSession(session);
-                if (sender != null) {
-                    ChatMessage chatMessage = objectMapper.treeToValue(jsonNode, ChatMessage.class);
-                    chatMessage.setSender(sender);
-                    broadcastMessage(chatMessage);
-                } else {
-                    session.sendMessage(new TextMessage("Error: Please login first"));
+            if (jsonNode.has("type")) {
+                String messageType = jsonNode.get("type").asText();
+                switch (messageType) {
+                    case "LOGIN":
+                        handleLoginMessage(session, jsonNode);
+                        break;
+                    case "CHAT":
+                        handleChatMessage(session, jsonNode);
+                        break;
+                    default:
+                        System.out.println("Unrecognized message type: " + messageType);
                 }
+            } else {
+                System.out.println("Received message without type: " + message.getPayload());
             }
         } catch (Exception e) {
             System.err.println("Error processing message: " + e.getMessage());
-            session.sendMessage(new TextMessage("Error processing message"));
+            sendErrorMessage(session, "Error processing message");
         }
     }
 
-    private String getSenderForSession(WebSocketSession session) {
-        return sessions.entrySet()
-                       .stream()
-                       .filter(entry -> entry.getValue().equals(session))
-                       .map(Map.Entry::getKey)
-                       .findFirst()
-                       .orElse(null);
+    private void handleLoginMessage(WebSocketSession session, JsonNode jsonNode) throws IOException {
+        String username = jsonNode.get("sender").asText();
+
+        if (!isValidUsername(username)) {
+            sendErrorMessage(session, "Invalid username. Use 3-20 characters, only letters, numbers, and underscores.");
+            return;
+        }
+
+        if (sessions.containsKey(username)) {
+            sendErrorMessage(session, "Username already taken. Please choose another.");
+            return;
+        }
+
+        // Username is valid and available
+        sessions.put(username, session);
+        session.getAttributes().put("username", username);
+        
+        // Send welcome message
+        sendMessage(session, "System", "Welcome to the chat, " + username + "!");
+        broadcastMessage("System", username + " has joined the chat");
+
+
+        // Broadcast updated user list
+        broadcastUserList();
     }
 
-    private void broadcastMessage(ChatMessage message) throws IOException {
-        TextMessage textMessage = new TextMessage(objectMapper.writeValueAsString(message));
+    private void handleChatMessage(WebSocketSession session, JsonNode jsonNode) throws IOException {
+        String sender = (String) session.getAttributes().get("username");
+        if (sender == null) {
+            sendErrorMessage(session, "You must be logged in to send messages.");
+            return;
+        }
+
+        String content = jsonNode.get("content").asText();
+        broadcastMessage(sender, content);
+    }
+
+    private boolean isValidUsername(String username) {
+        return USERNAME_PATTERN.matcher(username).matches();
+    }
+
+    private void sendErrorMessage(WebSocketSession session, String errorMessage) throws IOException {
+        ObjectNode errorNode = objectMapper.createObjectNode();
+        errorNode.put("type", "ERROR");
+        errorNode.put("message", errorMessage);
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(errorNode)));
+    }
+
+    private void sendMessage(WebSocketSession session, String sender, String content) throws IOException {
+        ObjectNode messageNode = objectMapper.createObjectNode();
+        messageNode.put("type", "CHAT");
+        messageNode.put("sender", sender);
+        messageNode.put("content", content);
+        messageNode.put("timestamp", System.currentTimeMillis());
+        session.sendMessage(new TextMessage(objectMapper.writeValueAsString(messageNode)));
+    }
+
+    private void broadcastMessage(String sender, String content) throws IOException {
+        ObjectNode messageNode = objectMapper.createObjectNode();
+        messageNode.put("type", "CHAT");
+        messageNode.put("sender", sender);
+        messageNode.put("content", content);
+        messageNode.put("timestamp", System.currentTimeMillis());
+        
+        String messageJson = objectMapper.writeValueAsString(messageNode);
         for (WebSocketSession session : sessions.values()) {
-            session.sendMessage(textMessage);
+            session.sendMessage(new TextMessage(messageJson));
+        }
+    }
+
+    private void broadcastUserList() throws IOException {
+        Set<String> usernames = sessions.keySet();
+        
+        ObjectNode userListNode = objectMapper.createObjectNode();
+        userListNode.put("type", "USER_LIST");
+        userListNode.set("users", objectMapper.valueToTree(usernames));
+        
+        String userListJson = objectMapper.writeValueAsString(userListNode);
+        for (WebSocketSession session : sessions.values()) {
+            session.sendMessage(new TextMessage(userListJson));
         }
     }
 
     @Override
-    public void afterConnectionClosed(@NonNull WebSocketSession session, @NonNull CloseStatus status) throws Exception {
-        String username = getSenderForSession(session);
+    public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
+        String username = (String) session.getAttributes().get("username");
         if (username != null) {
             sessions.remove(username);
-            broadcastMessage(new ChatMessage("System", username + " has left the chat", null));
+            broadcastUserList();
+            broadcastMessage("System", username + " has left the chat.");
         }
-        logger.info("WebSocket connection closed: " + session.getId());
+        System.out.println("WebSocket connection closed: " + session.getId());
     }
 
+    protected String getConnectedUsers(){
+        return sessions.keySet().toString();
+    }
+    
     public Map<String, WebSocketSession> getSessions(){
         return sessions;
     }
     
+    
     public void clearSessions() {
         sessions.clear();
     }
+    
 }
