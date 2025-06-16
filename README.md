@@ -6,8 +6,7 @@ A little chat application featuring real-time messaging, user presence tracking.
 - 🌓 Dark/Light theme
 - 👥 User presence tracking
 - 💾 Message persistence
-- 🔒 Username validation
-- 📱 Responsive design
+
 
 ## Tech Stack
 - Frontend: React, TypeScript, Styled-Components
